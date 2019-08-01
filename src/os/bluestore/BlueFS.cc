@@ -1448,6 +1448,12 @@ int BlueFS::_read(
 	   << " from " << h->file->fnode
 	   << (prefetch ? " prefetch" : "")
 	   << dendl;
+	// difei_test
+  std::cerr << __func__ << " h " << h
+           << " 0x" << std::hex << off << "~" << len << std::dec
+	   << " from " << h->file->fnode
+	   << (prefetch ? " prefetch" : "")
+	   << std::endl;
 
   ++h->file->num_reading;
 
@@ -1493,6 +1499,10 @@ int BlueFS::_read(
       dout(20) << __func__ << " fetching 0x"
                << std::hex << x_off << "~" << l << std::dec
                << " of " << *p << dendl;
+	// difei_test
+      std::cout << __func__ << " fetching 0x"
+               << std::hex << x_off << "~" << l << std::dec
+               << " of " << *p << std::endl;
       int r = bdev[p->bdev]->read(p->offset + x_off, l, &buf->bl, ioc[p->bdev],
 				  cct->_conf->bluefs_buffered_io);
       ceph_assert(r == 0);
@@ -1502,6 +1512,9 @@ int BlueFS::_read(
     left = buf->get_buf_remaining(off);
     dout(20) << __func__ << " left 0x" << std::hex << left
              << " len 0x" << len << std::dec << dendl;
+	//difei_test
+    std::cout << __func__ << " left 0x" << std::hex << left
+             << " len 0x" << len << std::dec << std::endl;
 
     int r = std::min(len, left);
     if (outbl) {

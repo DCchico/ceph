@@ -15,7 +15,7 @@ function(add_ceph_test test_name test_path)
     CEPH_BUILD_DIR=${CMAKE_BINARY_DIR}
     LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib
     PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:${CMAKE_SOURCE_DIR}/src:$ENV{PATH}
-    PYTHONPATH=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/cython_modules/lib.${PYTHON${PYTHON_VERSION}_VERSION_MAJOR}:${CMAKE_SOURCE_DIR}/src/pybind
+    PYTHONPATH=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/cython_modules/lib.${Python${PYTHON_VERSION}_VERSION_MAJOR}:${CMAKE_SOURCE_DIR}/src/pybind
     CEPH_BUILD_VIRTUALENV=${CEPH_BUILD_VIRTUALENV})
   # none of the tests should take more than 1 hour to complete
   set_property(TEST
@@ -35,9 +35,9 @@ if(WITH_GTEST_PARALLEL)
     BUILD_COMMAND ""
     INSTALL_COMMAND "")
   add_dependencies(tests gtest-parallel_ext)
-  find_package(PythonInterp REQUIRED)
+  find_package(Python REQUIRED)
   set(GTEST_PARALLEL_COMMAND
-    ${PYTHON_EXECUTABLE} ${gtest_parallel_source_dir}/gtest-parallel)
+    ${Python_EXECUTABLE} ${gtest_parallel_source_dir}/gtest-parallel)
 endif()
 
 #sets uniform compiler flags and link libraries
@@ -49,4 +49,28 @@ function(add_ceph_unittest unittest_name)
   endif()
   add_ceph_test(${unittest_name} "${UNITTEST}")
   target_link_libraries(${unittest_name} ${UNITTEST_LIBS})
+endfunction()
+
+function(add_tox_test name tox_path)
+  set(test_name run-tox-${name})
+  add_test(
+    NAME ${test_name}
+    COMMAND ${CMAKE_SOURCE_DIR}/src/script/run_tox.sh
+              --source-dir ${CMAKE_SOURCE_DIR}
+              --build-dir ${CMAKE_BINARY_DIR}
+              --with-python2 ${WITH_PYTHON2}
+              --with-python3 ${WITH_PYTHON3}
+              --tox-path ${tox_path}
+              --venv-path ${CEPH_BUILD_VIRTUALENV}/${name})
+  set_property(
+    TEST ${test_name}
+    PROPERTY ENVIRONMENT
+    CEPH_ROOT=${CMAKE_SOURCE_DIR}
+    CEPH_BIN=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    CEPH_LIB=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+    CEPH_BUILD_VIRTUALENV=${CEPH_BUILD_VIRTUALENV}
+    LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib
+    PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:${CMAKE_SOURCE_DIR}/src:$ENV{PATH}
+    PYTHONPATH=${CMAKE_SOURCE_DIR}/src/pybind)
+  list(APPEND tox_test run-tox-${name})
 endfunction()

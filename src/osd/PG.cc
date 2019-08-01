@@ -1142,6 +1142,9 @@ void PG::read_state(ObjectStore *store)
       recovery_state.set_role(-1);
   }
 
+  // init pool options
+  store->set_collection_opts(ch, pool.info.opts);
+
   PeeringCtx rctx;
   handle_initialize(rctx);
   // note: we don't activate here because we know the OSD will advance maps
@@ -1421,7 +1424,10 @@ bool PG::sched_scrub()
     scrubber.need_auto = false;
 
     ceph_assert(scrubber.reserved_peers.empty());
-    if ((cct->_conf->osd_scrub_during_recovery || !osd->is_recovery_active()) &&
+    bool allow_scrubing = cct->_conf->osd_scrub_during_recovery ||
+                          (cct->_conf->osd_repair_during_recovery && scrubber.must_repair) ||
+                          !osd->is_recovery_active();
+    if (allow_scrubing &&
          osd->inc_scrubs_pending()) {
       dout(20) << __func__ << ": reserved locally, reserving replicas" << dendl;
       scrubber.reserved = true;
@@ -3681,12 +3687,17 @@ void PG::handle_query_state(Formatter *f)
   }
 }
 
-void PG::on_pool_change()
+void PG::init_collection_pool_opts()
 {
   auto r = osd->store->set_collection_opts(ch, pool.info.opts);
-  if(r < 0 && r != -EOPNOTSUPP) {
+  if (r < 0 && r != -EOPNOTSUPP) {
     derr << __func__ << " set_collection_opts returns error:" << r << dendl;
   }
+}
+
+void PG::on_pool_change()
+{
+  init_collection_pool_opts();
   plpg_on_pool_change();
 }
 

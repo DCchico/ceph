@@ -403,6 +403,9 @@ private:
   void process_failures();
   void take_all_failures(list<MonOpRequestRef>& ls);
 
+  bool preprocess_mark_me_dead(MonOpRequestRef op);
+  bool prepare_mark_me_dead(MonOpRequestRef op);
+
   bool preprocess_full(MonOpRequestRef op);
   bool prepare_full(MonOpRequestRef op);
 
@@ -748,6 +751,8 @@ public:
   void do_application_enable(int64_t pool_id, const std::string &app_name,
 			     const std::string &app_key="",
 			     const std::string &app_value="");
+  void do_set_pool_opt(int64_t pool_id, pool_opts_t::key_t opt,
+		       pool_opts_t::value_t);
 
   void add_flag(int flag) {
     if (!(osdmap.flags & flag)) {

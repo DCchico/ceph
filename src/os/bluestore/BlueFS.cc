@@ -441,7 +441,8 @@ void BlueFS::_init_alloc()
       continue;
     }
     ceph_assert(bdev[id]->get_size());
-    alloc[id] = Allocator::create(cct, cct->_conf->bluefs_allocator,
+    // Difei type = cct->_conf->bluefs_allocator
+    alloc[id] = Allocator::create(cct, "bitmap",
 				  bdev[id]->get_size(),
 				  cct->_conf->bluefs_alloc_size);
     interval_set<uint64_t>& p = block_all[id];

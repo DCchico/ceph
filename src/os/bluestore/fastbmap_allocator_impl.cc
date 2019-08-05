@@ -15,6 +15,7 @@ uint64_t AllocatorLevel::alloc_fragments = 0;
 uint64_t AllocatorLevel::alloc_fragments_fast = 0;
 uint64_t AllocatorLevel::l2_allocs = 0;
 
+// Truncate interval<off, len> (both head and tail) to align with min_length 
 inline interval_t _align2units(uint64_t offset, uint64_t len, uint64_t min_length)
 {
   interval_t res;
@@ -50,9 +51,9 @@ interval_t AllocatorLevel01Loose::_get_longest_from_l0(uint64_t pos0,
   }
   *tail = interval_t();
 
-  auto d = bits_per_slot;
+  auto d = CHILD_PER_SLOT_L0;
   slot_t bits = l0[pos / d];
-  bits >>= pos % d;
+  bits >>= ((pos % d) * L0_ENTRY_WIDTH);
   bool end_loop = false;
   auto min_granules = min_length / l0_granularity;
 
@@ -94,7 +95,7 @@ interval_t AllocatorLevel01Loose::_get_longest_from_l0(uint64_t pos0,
     } //if ((pos % d) == 0)
 
     end_loop = ++pos >= pos1;
-    if (bits & 1) {
+	if (!(~(bits | ~(slot_t(L0_ENTRY_MASK))))) {
       // item is free
       if (!res_candidate.length) {
 	res_candidate.offset = pos - 1;
@@ -116,7 +117,7 @@ interval_t AllocatorLevel01Loose::_get_longest_from_l0(uint64_t pos0,
       }
       res_candidate = interval_t();
     }
-    bits >>= 1;
+    bits >>= L0_ENTRY_WIDTH;
   } while (!end_loop);
   res.offset *= l0_granularity;
   res.length *= l0_granularity;
@@ -209,14 +210,14 @@ void AllocatorLevel01Loose::_mark_l1_on_l0(int64_t l0_pos, int64_t l0_pos_end)
   if (l0_pos == l0_pos_end) {
     return;
   }
-  auto d0 = bits_per_slotset;
+  auto d0 = CHILD_PER_SLOT_L0;
   uint64_t l1_w = CHILD_PER_SLOT;
   // this should be aligned with slotset boundaries
   ceph_assert(0 == (l0_pos % d0));
   ceph_assert(0 == (l0_pos_end % d0));
 
-  int64_t idx = l0_pos / bits_per_slot;
-  int64_t idx_end = l0_pos_end / bits_per_slot;
+  int64_t idx = l0_pos / CHILD_PER_SLOT_L0;
+  int64_t idx_end = l0_pos_end / CHILD_PER_SLOT_L0;
   slot_t mask_to_apply = L1_ENTRY_NOT_USED;
 
   auto l1_pos = l0_pos / d0;
@@ -252,7 +253,7 @@ void AllocatorLevel01Loose::_mark_l1_on_l0(int64_t l0_pos, int64_t l0_pos_end)
       ceph_assert(mask_to_apply != L1_ENTRY_NOT_USED);
       uint64_t shift = (l1_pos % l1_w) * L1_ENTRY_WIDTH;
       slot_t& slot_val = l1[l1_pos / l1_w];
-      auto mask = slot_t(L1_ENTRY_MASK) << shift;
+      auto mask = slot_t(L1_ENTRY_MASK) << shift;			// mask = 0011 << shift
 
       slot_t old_mask = (slot_val & mask) >> shift;
       switch(old_mask) {
@@ -285,12 +286,12 @@ void AllocatorLevel01Loose::_mark_alloc_l0(int64_t l0_pos_start,
   auto d0 = CHILD_PER_SLOT_L0;
 
   int64_t pos = l0_pos_start;
-  slot_t bits = (slot_t)1 << (l0_pos_start % d0);
+  slot_t bits = (slot_t)L0_ENTRY_MASK << ((l0_pos_start % d0) * L0_ENTRY_WIDTH);
   slot_t* val_s = &l0[pos / d0];
   int64_t pos_e = std::min(l0_pos_end, p2roundup<int64_t>(l0_pos_start + 1, d0));
   while (pos < pos_e) {
     (*val_s) &= ~bits;
-    bits <<= 1;
+    bits <<= L0_ENTRY_WIDTH;
     pos++;
   }
   pos_e = std::min(l0_pos_end, p2align<int64_t>(l0_pos_end, d0));
@@ -298,11 +299,11 @@ void AllocatorLevel01Loose::_mark_alloc_l0(int64_t l0_pos_start,
     *(++val_s) = all_slot_clear;
     pos += d0;
   }
-  bits = 1;
+  bits = L0_ENTRY_MASK;
   ++val_s;
   while (pos < l0_pos_end) {
     (*val_s) &= ~bits;
-    bits <<= 1;
+    bits <<= L0_ENTRY_WIDTH;
     pos++;
   }
 }
@@ -427,8 +428,8 @@ bool AllocatorLevel01Loose::_allocate_l1(uint64_t length,
   uint64_t* allocated,
   interval_vector_t* res)
 {
-  uint64_t d0 = CHILD_PER_SLOT_L0;
-  uint64_t d1 = CHILD_PER_SLOT;
+  uint64_t d0 = CHILD_PER_SLOT_L0; //32
+  uint64_t d1 = CHILD_PER_SLOT; //32
 
   ceph_assert(0 == (l1_pos_start % (slotset_width * d1)));
   ceph_assert(0 == (l1_pos_end % (slotset_width * d1)));
@@ -520,7 +521,7 @@ void AllocatorLevel01Loose::collect_stats(
     } else if(slot != all_slot_clear) {
       size_t pos = 0;
       do {
-	auto pos1 = find_next_set_bit(slot, pos);
+	auto pos1 = find_next_set_bit_l0(slot, pos);
 	if (pos1 == pos) {
 	  free_seq_cnt++;
 	  pos = pos1 + 1;

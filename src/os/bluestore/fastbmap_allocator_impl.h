@@ -52,6 +52,25 @@ static const size_t bits_per_slotset = slotset_bytes * 8;
 static const slot_t all_slot_set = 0xffffffffffffffff;
 static const slot_t all_slot_clear = 0;
 
+// Difei: func specific to l0
+inline size_t find_next_set_bit_l0(slot_t slot_val, size_t start_pos)
+{
+/* Difei: Unknown part
+#ifdef __GNUC__
+	if (start_pos == 0) {
+		start_pos = __builtin_ffsll(slot_val);
+		return start_pos ? start_pos - 1 : bits_per_slot;
+	}
+#endif
+*/
+	slot_t mask = slot_t(3) << start_pos; // 11 to represent set free
+	while (start_pos < bits_per_slot && ~(slot_val | ~mask)) {
+		mask <<= 2;
+		start_pos+=2;
+	}
+	return start_pos;
+}
+
 inline size_t find_next_set_bit(slot_t slot_val, size_t start_pos)
 {
 #ifdef __GNUC__
@@ -103,6 +122,7 @@ protected:
   size_t partial_l1_count = 0;
   size_t unalloc_l1_count = 0;
 
+  // l1_level: ratio of partial to total available slots 
   double get_fragmentation() const {
     double res = 0.0;
     auto total = unalloc_l1_count + partial_l1_count;
@@ -134,6 +154,15 @@ class AllocatorLevel02;
 class AllocatorLevel01Loose : public AllocatorLevel01
 {
   enum {
+	// Difei: L0 new bit representation
+	L0_ENTRY_WIDTH = 2,
+	L0_ENTRY_MASK = (1 << L0_ENTRY_WIDTH) - 1,
+	L0_ENTRY_FULL = 0x00,
+	L0_SHARE_ONCE = 0x01,
+	L0_SHARE_TWICE = 0x02,
+	L0_ENTRY_FREE = 0x03,
+	CHILD_PER_SLOT_L0 = bits_per_slot / L0_ENTRY_WIDTH, // 32
+
     L1_ENTRY_WIDTH = 2,
     L1_ENTRY_MASK = (1 << L1_ENTRY_WIDTH) - 1,
     L1_ENTRY_FULL = 0x00,
@@ -141,7 +170,6 @@ class AllocatorLevel01Loose : public AllocatorLevel01
     L1_ENTRY_NOT_USED = 0x02,
     L1_ENTRY_FREE = 0x03,
     CHILD_PER_SLOT = bits_per_slot / L1_ENTRY_WIDTH, // 32
-    CHILD_PER_SLOT_L0 = bits_per_slot, // 64
   };
   uint64_t _children_per_slot() const override
   {
@@ -151,6 +179,7 @@ class AllocatorLevel01Loose : public AllocatorLevel01
   interval_t _get_longest_from_l0(uint64_t pos0, uint64_t pos1,
     uint64_t min_length, interval_t* tail) const;
 
+  // put available (offset, length) to interval_vector as max_length segments
   inline void _fragment_and_emplace(uint64_t max_length, uint64_t offset,
     uint64_t len,
     interval_vector_t* res)
@@ -227,14 +256,15 @@ class AllocatorLevel01Loose : public AllocatorLevel01
         continue;
       }
 
-      auto free_pos = find_next_set_bit(slot_val, 0);
-      ceph_assert(free_pos < bits_per_slot);
+      auto free_pos = find_next_set_bit_l0(slot_val, 0);
+	  free_pos /= L0_ENTRY_WIDTH;
+      ceph_assert(free_pos < CHILD_PER_SLOT_L0);
       auto next_pos = free_pos + 1;
-      while (next_pos < bits_per_slot &&
+      while (next_pos < CHILD_PER_SLOT_L0 &&
         (next_pos - free_pos) < need_entries) {
 	++l0_inner_iterations;
 
-        if (0 == (slot_val & (slot_t(1) << next_pos))) {
+        if (0 != (slot_val | (~(slot_t(L0_ENTRY_MASK))) << (next_pos * L0_ENTRY_WIDTH))) { // not free on the next_pos
           auto to_alloc = (next_pos - free_pos);
           *allocated += to_alloc * l0_granularity;
 	  ++alloc_fragments;
@@ -242,13 +272,14 @@ class AllocatorLevel01Loose : public AllocatorLevel01
 	  _fragment_and_emplace(max_length, (base + free_pos) * l0_granularity,
 	    to_alloc * l0_granularity, res);
           _mark_alloc_l0(base + free_pos, base + next_pos);
-          free_pos = find_next_set_bit(slot_val, next_pos + 1);
+          free_pos = find_next_set_bit_l0(slot_val, next_pos + 1);
+		  free_pos /= L0_ENTRY_WIDTH;
           next_pos = free_pos + 1;
         } else {
           ++next_pos;
         }
       }
-      if (need_entries && free_pos < bits_per_slot) {
+      if (need_entries && free_pos < CHILD_PER_SLOT_L0) {
         auto to_alloc = std::min(need_entries, d0 - free_pos);
         *allocated += to_alloc * l0_granularity;
 	++alloc_fragments;
@@ -268,8 +299,8 @@ protected:
   void _init(uint64_t capacity, uint64_t _alloc_unit, bool mark_as_free = true)
   {
     l0_granularity = _alloc_unit;
-    // 512 bits at L0 mapped to L1 entry
-    l1_granularity = l0_granularity * bits_per_slotset;
+    // 256 entries at L0 mapped to L1 entry
+    l1_granularity = l0_granularity * bits_per_slotset / L0_ENTRY_WIDTH;
 
     // capacity to have slot alignment at l1
     auto aligned_capacity =
@@ -281,7 +312,7 @@ protected:
     l1.resize(slot_count, mark_as_free ? all_slot_set : all_slot_clear);
 
     // l0 slot count
-    size_t slot_count_l0 = aligned_capacity / _alloc_unit / bits_per_slot;
+    size_t slot_count_l0 = aligned_capacity / _alloc_unit / bits_per_slot / L0_ENTRY_WIDTH;
     // we use set bit(s) as a marker for (partially) free entry
     l0.resize(slot_count_l0, mark_as_free ? all_slot_set : all_slot_clear);
 
@@ -326,8 +357,8 @@ protected:
   void _mark_alloc_l1_l0(int64_t l0_pos_start, int64_t l0_pos_end)
   {
     _mark_alloc_l0(l0_pos_start, l0_pos_end);
-    l0_pos_start = p2align(l0_pos_start, int64_t(bits_per_slotset));
-    l0_pos_end = p2roundup(l0_pos_end, int64_t(bits_per_slotset));
+    l0_pos_start = p2align(l0_pos_start, int64_t(bits_per_slotset / L0_ENTRY_WIDTH));
+    l0_pos_end = p2roundup(l0_pos_end, int64_t(bits_per_slotset / L0_ENTRY_WIDTH));
     _mark_l1_on_l0(l0_pos_start, l0_pos_end);
   }
 
@@ -336,13 +367,13 @@ protected:
     auto d0 = CHILD_PER_SLOT_L0;
 
     auto pos = l0_pos_start;
-    slot_t bits = (slot_t)1 << (l0_pos_start % d0);
+    slot_t bits = (slot_t)L0_ENTRY_MASK << ((l0_pos_start % d0) * L0_ENTRY_WIDTH);
     slot_t* val_s = &l0[pos / d0];
     int64_t pos_e = std::min(l0_pos_end,
                              p2roundup<int64_t>(l0_pos_start + 1, d0));
     while (pos < pos_e) {
       *val_s |=  bits;
-      bits <<= 1;
+      bits <<= L0_ENTRY_WIDTH;
       pos++;
     }
     pos_e = std::min(l0_pos_end, p2align<int64_t>(l0_pos_end, d0));
@@ -350,11 +381,11 @@ protected:
       *(++val_s) = all_slot_set;
       pos += d0;
     }
-    bits = 1;
+    bits = L0_ENTRY_MASK;
     ++val_s;
     while (pos < l0_pos_end) {
       *val_s |= bits;
-      bits <<= 1;
+      bits <<= L0_ENTRY_WIDTH;
       pos++;
     }
   }
@@ -362,11 +393,12 @@ protected:
   void _mark_free_l1_l0(int64_t l0_pos_start, int64_t l0_pos_end)
   {
     _mark_free_l0(l0_pos_start, l0_pos_end);
-    l0_pos_start = p2align(l0_pos_start, int64_t(bits_per_slotset));
-    l0_pos_end = p2roundup(l0_pos_end, int64_t(bits_per_slotset));
+    l0_pos_start = p2align(l0_pos_start, int64_t(bits_per_slotset / L0_ENTRY_WIDTH));
+    l0_pos_end = p2roundup(l0_pos_end, int64_t(bits_per_slotset / L0_ENTRY_WIDTH));
     _mark_l1_on_l0(l0_pos_start, l0_pos_end);
   }
 
+  // return True if fully allocated
   bool _is_empty_l0(uint64_t l0_pos, uint64_t l0_pos_end)
   {
     bool no_free = true;
@@ -382,6 +414,7 @@ protected:
     }
     return no_free;
   }
+
   bool _is_empty_l1(uint64_t l1_pos, uint64_t l1_pos_end)
   {
     bool no_free = true;
@@ -507,10 +540,14 @@ public:
     std::lock_guard l(lock);
     return available;
   }
+
+  // return l0_granularity
   inline uint64_t get_min_alloc_size() const
   {
     return l1.get_min_alloc_size();
   }
+
+  // not implemented
   void collect_stats(
     std::map<size_t, size_t>& bins_overall) override {
 
@@ -641,7 +678,7 @@ protected:
       max_length = cap;
     }
 
-    uint64_t l1_w = slotset_width * l1._children_per_slot();
+    uint64_t l1_w = slotset_width * l1._children_per_slot(); // 8*32=256
 
     std::lock_guard l(lock);
 

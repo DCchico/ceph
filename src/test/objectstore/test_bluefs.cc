@@ -136,7 +136,7 @@ TEST(BlueFS, small_appends) {
   fs.umount();
   rm_temp_bdev(fn);
 }
-/*
+
 TEST(BlueFS, very_large_write) {
   // we'll write a ~3G file, so allocate more than that for the whole fs
   uint64_t size = 1048576 * 1024 * 8ull;
@@ -188,7 +188,7 @@ TEST(BlueFS, very_large_write) {
 
   rm_temp_bdev(fn);
 }
-*/
+
 
 #define ALLOC_SIZE 4096
 
@@ -301,7 +301,7 @@ void join_all(std::vector<std::thread>& v)
 
 #define NUM_SINGLE_FILE_WRITERS 1
 #define NUM_MULTIPLE_FILE_WRITERS 2
-/*
+
 TEST(BlueFS, test_flush_1) {
   uint64_t size = 1048576 * 128;
   string fn = get_temp_bdev(size);
@@ -622,7 +622,7 @@ TEST(BlueFS, test_replay) {
   fs.umount();
   rm_temp_bdev(fn);
 }
-*/
+
 
 int main(int argc, char **argv) {
   vector<const char*> args;

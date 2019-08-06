@@ -51,6 +51,7 @@ static const size_t bits_per_slot = sizeof(slot_t) * 8;
 static const size_t bits_per_slotset = slotset_bytes * 8;
 static const slot_t all_slot_set = 0xffffffffffffffff;
 static const slot_t all_slot_clear = 0;
+static const size_t l0_entry_size = 2; // Difei: for change l0 entry size
 
 // Difei: func specific to l0
 inline size_t find_next_set_bit_l0(slot_t slot_val, size_t start_pos)
@@ -63,10 +64,10 @@ inline size_t find_next_set_bit_l0(slot_t slot_val, size_t start_pos)
 	}
 #endif
 */
-	slot_t mask = slot_t(3) << start_pos; // 11 to represent set free
+	slot_t mask = slot_t((slot_t(1) << l0_entry_size) - 1) << start_pos; // 11 to represent set free
 	while (start_pos < bits_per_slot && ~(slot_val | ~mask)) {
-		mask <<= 2;
-		start_pos+=2;
+		mask <<= l0_entry_size;
+		start_pos+=l0_entry_size;
 	}
 	return start_pos;
 }
@@ -86,7 +87,6 @@ inline size_t find_next_set_bit(slot_t slot_val, size_t start_pos)
   }
   return start_pos;
 }
-
 
 class AllocatorLevel
 {
@@ -176,6 +176,23 @@ class AllocatorLevel01Loose : public AllocatorLevel01
     return CHILD_PER_SLOT;
   }
 
+  // Difei: check if l0 slot is all allocated
+  inline bool _is_l0_slot_clear(slot_t slot_val) const
+  {
+	 size_t pos = 0;
+	 slot_t val = 0;
+	 while (pos < bits_per_slot) {
+		 val = slot_val & L0_ENTRY_MASK;
+		 if (val == L0_ENTRY_FREE) {
+			 return false;
+		 }
+		 slot_val >>= L0_ENTRY_WIDTH;
+		 pos += 2;
+	 }
+	 return true;
+  }
+
+  //Difei
   interval_t _get_longest_from_l0(uint64_t pos0, uint64_t pos1,
     uint64_t min_length, interval_t* tail) const;
 
@@ -214,6 +231,7 @@ class AllocatorLevel01Loose : public AllocatorLevel01
     }
   }
 
+  // Difei
   bool _allocate_l0(uint64_t length,
     uint64_t max_length,
     uint64_t l0_pos0, uint64_t l0_pos1,
@@ -237,7 +255,7 @@ class AllocatorLevel01Loose : public AllocatorLevel01
       ++l0_iterations;
       slot_t& slot_val = l0[idx];
       auto base = idx * d0;
-      if (slot_val == all_slot_clear) {
+      if (_is_l0_slot_clear(slot_val)) {
         continue;
       } else if (slot_val == all_slot_set) {
         uint64_t to_alloc = std::min(need_entries, d0);
@@ -264,7 +282,7 @@ class AllocatorLevel01Loose : public AllocatorLevel01
         (next_pos - free_pos) < need_entries) {
 	++l0_inner_iterations;
 
-        if (0 != (slot_val | (~(slot_t(L0_ENTRY_MASK))) << (next_pos * L0_ENTRY_WIDTH))) { // not free on the next_pos
+        if (0 != ~(slot_val | ~((slot_t(L0_ENTRY_MASK)) << (next_pos * L0_ENTRY_WIDTH)))) { // not free on the next_pos
           auto to_alloc = (next_pos - free_pos);
           *allocated += to_alloc * l0_granularity;
 	  ++alloc_fragments;
@@ -409,7 +427,7 @@ protected:
     auto idx = l0_pos / CHILD_PER_SLOT_L0;
     auto idx_end = l0_pos_end / CHILD_PER_SLOT_L0;
     while (idx < idx_end && no_free) {
-      no_free = l0[idx] == all_slot_clear;
+      no_free = _is_l0_slot_clear(l0[idx]);
       ++idx;
     }
     return no_free;
@@ -478,13 +496,13 @@ public:
     if (idx1 == 0) {
       idx1 = l0.size();
     }
-
+	// Difei
     uint64_t res = 0;
     for (uint64_t i = idx0; i < idx1; ++i) {
       auto v = l0[i];
       if (v == all_slot_set) {
         res += CHILD_PER_SLOT_L0;
-      } else if (v != all_slot_clear) {
+      } else if (!_is_l0_slot_clear(v)) {
         size_t cnt = 0;
 #ifdef __GNUC__
         cnt = __builtin_popcountll(v);

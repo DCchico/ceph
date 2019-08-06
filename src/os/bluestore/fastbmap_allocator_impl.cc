@@ -61,36 +61,35 @@ interval_t AllocatorLevel01Loose::_get_longest_from_l0(uint64_t pos0,
     if ((pos % d) == 0) {
       bits = l0[pos / d];
       if (pos1 - pos >= d) {
-        switch(bits) {
-	  case all_slot_set:
-	    // slot is totally free
-	    if (!res_candidate.length) {
-	      res_candidate.offset = pos;
-	    }
-	    res_candidate.length += d;
-	    pos += d;
-	    end_loop = pos >= pos1;
-	    if (end_loop) {
-	      *tail = res_candidate;
-	      res_candidate = _align2units(res_candidate.offset,
-		res_candidate.length, min_granules);
-	      if(res.length < res_candidate.length) {
-		res = res_candidate;
-	      }
-	    }
-	    continue;
-	  case all_slot_clear:
-	    // slot is totally allocated
-	    res_candidate = _align2units(res_candidate.offset,
-	      res_candidate.length, min_granules);
-	    if (res.length < res_candidate.length) {
-	      res = res_candidate;
-	    }
-	    res_candidate = interval_t();
-	    pos += d;
-	    end_loop = pos >= pos1;
-	    continue;
-	}
+		  if (bits == all_slot_set) {
+			  // slot is totally free
+			  if (!res_candidate.length) {
+				  res_candidate.offset = pos;
+			  }
+			  res_candidate.length += d;
+			  pos += d;
+			  end_loop = pos >= pos1;
+			  if (end_loop) {
+				  *tail = res_candidate;
+				  res_candidate = _align2units(res_candidate.offset,
+					  res_candidate.length, min_granules);
+				  if (res.length < res_candidate.length) {
+					  res = res_candidate;
+				  }
+			  }
+			  continue;
+		  } else if (_is_l0_slot_clear(bits)) {
+				// slot is totally allocated
+				res_candidate = _align2units(res_candidate.offset,
+					res_candidate.length, min_granules);
+				if (res.length < res_candidate.length) {
+					res = res_candidate;
+				}
+				res_candidate = interval_t();
+				pos += d;
+				end_loop = pos >= pos1;
+				continue;
+		}
       }
     } //if ((pos % d) == 0)
 
@@ -205,6 +204,8 @@ void AllocatorLevel01Loose::_analyze_partials(uint64_t pos_start,
   ctx->fully_processed = true;
 }
 
+
+//Difei: bit expression
 void AllocatorLevel01Loose::_mark_l1_on_l0(int64_t l0_pos, int64_t l0_pos_end)
 {
   if (l0_pos == l0_pos_end) {
@@ -223,7 +224,7 @@ void AllocatorLevel01Loose::_mark_l1_on_l0(int64_t l0_pos, int64_t l0_pos_end)
   auto l1_pos = l0_pos / d0;
 
   while (idx < idx_end) {
-    if (l0[idx] == all_slot_clear) {
+    if (_is_l0_slot_clear(l0[idx])) {
       // if not all prev slots are allocated then no need to check the
       // current slot set, it's partial
       ++idx;
@@ -518,7 +519,7 @@ void AllocatorLevel01Loose::collect_stats(
   for (auto slot : l0) {
     if (slot == all_slot_set) {
       free_seq_cnt += CHILD_PER_SLOT_L0;
-    } else if(slot != all_slot_clear) {
+    } else if(!_is_l0_slot_clear(slot)) {
       size_t pos = 0;
       do {
 	auto pos1 = find_next_set_bit_l0(slot, pos);

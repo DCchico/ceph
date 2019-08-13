@@ -441,7 +441,6 @@ void BlueFS::_init_alloc()
       continue;
     }
     ceph_assert(bdev[id]->get_size());
-    // Difei type = cct->_conf->bluefs_allocator
     alloc[id] = Allocator::create(cct, "bitmap",
 				  bdev[id]->get_size(),
 				  cct->_conf->bluefs_alloc_size);
@@ -2218,18 +2217,18 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
       }
     }
   }
-  if (length == partial + h->buffer.length()) {
-    bl.claim_append_piecewise(h->buffer);
-  } else {
+  if (length == partial + h->buffer.length()) { // 1. want to read all data in the buffer
+    bl.claim_append_piecewise(h->buffer);		// splice data in buffer to tail of bl
+  } else {										// 2. when length needed is not whole data in buffer
     bufferlist t;
-    h->buffer.splice(0, length, &t);
-    bl.claim_append_piecewise(t);
-    t.substr_of(h->buffer, length, h->buffer.length() - length);
-    h->buffer.swap(t);
+    h->buffer.splice(0, length, &t);			// move!!! buffer(0,length) to tail of bufferlist t
+    bl.claim_append_piecewise(t);				// splice needed data length (from t) to bl
+    t.substr_of(h->buffer, length, h->buffer.length() - length);	// t is set to unneeded data
+    h->buffer.swap(t);												// swap buffer to unneeded data
     dout(20) << " leaving 0x" << std::hex << h->buffer.length() << std::dec
              << " unflushed" << dendl;
   }
-  ceph_assert(bl.length() == length);
+  ceph_assert(bl.length() == length);			// make sure data is in bl
 
   switch (h->writer_type) {
   case WRITER_WAL:
@@ -2250,30 +2249,31 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
   uint64_t bloff = 0;
   uint64_t bytes_written_slow = 0;
   while (length > 0) {
-    uint64_t x_len = std::min(p->length - x_off, length);
+    uint64_t x_len = std::min(p->length - x_off, length);	//size can be writen
     bufferlist t;
-    t.substr_of(bl, bloff, x_len);
-    unsigned tail = x_len & ~super.block_mask();
+    t.substr_of(bl, bloff, x_len);							// !!!!!!t set to data to be writen
+    unsigned tail = x_len & ~super.block_mask();			// tail = tail of 4kB block
     if (tail) {
-      size_t zlen = super.block_size - tail;
+      size_t zlen = super.block_size - tail;				// zlen = 4kB - tail
       dout(20) << __func__ << " caching tail of 0x"
                << std::hex << tail
 	       << " and padding block with 0x" << zlen
 	       << std::dec << dendl;
-      h->tail_block.substr_of(bl, bl.length() - tail, tail);
+      h->tail_block.substr_of(bl, bl.length() - tail, tail); // set h->tail_block to the end of bl
       if (h->file->fnode.ino > 1) {
-	// we are using the page_aligned_appender, and can safely use
-	// the tail of the raw buffer.
-	const bufferptr &last = t.back();
-	if (last.unused_tail_length() < zlen) {
-	  derr << " wtf, last is " << last << " from " << t << dendl;
-	  ceph_assert(last.unused_tail_length() >= zlen);
-	}
-	bufferptr z = last;
-	z.set_offset(last.offset() + last.length());
-	z.set_length(zlen);
-	z.zero();
-	t.append(z, 0, zlen);
+		// we are using the page_aligned_appender, and can safely use
+		// the tail of the raw buffer.
+		const bufferptr &last = t.back();
+		// fill with 0 in the remaining space
+		if (last.unused_tail_length() < zlen) {
+		  derr << " wtf, last is " << last << " from " << t << dendl;
+		  ceph_assert(last.unused_tail_length() >= zlen);
+		}
+		bufferptr z = last;
+		z.set_offset(last.offset() + last.length());
+		z.set_length(zlen);
+		z.zero();
+		t.append(z, 0, zlen);
       } else {
 	t.append_zero(zlen);
       }
@@ -2334,11 +2334,14 @@ void BlueFS::wait_for_aio(FileWriter *h)
 }
 #endif
 
-int BlueFS::_flush(FileWriter *h, bool force)
+// Difei: Add _flush to carry copy
+int BlueFS::_flush(FileWriter *h, bool force, 
+	std::vector<std::vector<uint64_t>> copy)
 {
   h->buffer_appender.flush();
   uint64_t length = h->buffer.length();
   uint64_t offset = h->pos;
+  uint64_t off = h->pos;
   if (!force &&
       length < cct->_conf->bluefs_min_flush_size) {
     dout(10) << __func__ << " " << h << " ignoring, length " << length
@@ -2355,7 +2358,29 @@ int BlueFS::_flush(FileWriter *h, bool force)
            << std::hex << offset << "~" << length << std::dec
 	   << " to " << h->file->fnode << dendl;
   ceph_assert(h->pos <= h->file->fnode.size);
-  return _flush_range(h, offset, length);
+  //flush the by ranges
+  if (copy.empty()) {
+	  return _flush_range(h, offset, length);
+  }
+  // TODO: ranges can be flushed once by connecting them, while
+  // _allocate_mark_copy can be done seperately
+  uint64_t sub_len = 0;
+  std::vector<std::vector<uint64_t>>::iterator it;
+  // copy <new_offset, phy_offset, bdev>
+  for (it = copy.begin(); it != copy.end(); ++it){
+	sub_len = (*it)[0] - offset;
+	if (sub_len != 0) {
+	  _flush_range(h, offset, sub_len);
+	  offset += sub_len;
+	}
+	// TODO: return error value if bdev[id] DNE
+	_allocate_mark_copy(h, offset, (*it)[1], (*it)[2]);
+	offset += super.block_size;
+  }
+  sub_len = off + length - offset;
+  if (sub_len != 0)
+	_flush_range(h, offset, sub_len);
+  return 0;
 }
 
 int BlueFS::_truncate(FileWriter *h, uint64_t offset)
@@ -2398,11 +2423,12 @@ int BlueFS::_truncate(FileWriter *h, uint64_t offset)
   log_t.op_file_update(h->file->fnode);
   return 0;
 }
-
-int BlueFS::_fsync(FileWriter *h, std::unique_lock<ceph::mutex>& l)
+// Difei: just add it to deliver copy<new_off, phy_off>, <>
+int BlueFS::_fsync(FileWriter *h, std::unique_lock<ceph::mutex>& l, 
+	std::vector<std::vector<uint64_t>> copy)
 {
   dout(10) << __func__ << " " << h << " " << h->file->fnode << dendl;
-  int r = _flush(h, true);
+  int r = _flush(h, true, copy);
   if (r < 0)
      return r;
   uint64_t old_dirty_seq = h->file->dirty_seq;
@@ -2512,6 +2538,83 @@ int BlueFS::_allocate_without_fallback(uint8_t id, uint64_t len,
     if (alloc[id])
       alloc[id]->dump();
     return -ENOSPC;
+  }
+
+  return 0;
+}
+
+//Difei : allocate_copy function
+int BlueFS::_allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t offset, uint8_t id)
+{
+  ceph_assert(offset <= h->file->fnode.size);
+  uint64_t allocated = h->file->fnode.get_allocated();
+  // do not bother to dirty the file if we are overwriting
+  // previously allocated extents.
+  bool must_dirty = false; 
+  if (allocated < offset + super.block_size) {
+	// we should never run out of log space here; see the min runway check
+	// in _flush_and_sync_log.
+	// _allocate function
+	dout(10) << __func__ << " len 0x" << std::hex << super.block_size << std::dec
+		<< " from " << (int)id << dendl;
+	ceph_assert(id < alloc.size());
+	if (!alloc[id]) {
+	  return -ENOENT;
+	}
+	PExtentVector extents;
+	int64_t alloc_len;
+	if (alloc[id]) {
+	  extents.reserve(1); // TODO: see if that is enough
+	  alloc_len = alloc[id]->allocate_copy(offset, &extents);
+	  // If alloc_len == -ENOSPC (fail to mark): need to real write
+	  if (alloc_len < 0) {
+		return _flush_range(h, new_offset, super.block_size);
+	  }
+	  h->pos += super.block_size;
+	  for (auto& p : extents) {
+		h->file->fnode.append_extent(bluefs_extent_t(id, p.offset, p.length));
+	  }
+	} // finish allocate!
+	must_dirty = true;
+  }
+  h->file->fnode.size = offset + super.block_size;
+  if (h->file->fnode.ino > 1) {
+	// we do not need to dirty the log file (or it's compacting
+	// replacement) when the file size changes because replay is
+	// smart enough to discover it on its own.
+	must_dirty = true;
+  }
+  if (must_dirty) {
+	h->file->fnode.mtime = ceph_clock_now();
+    ceph_assert(h->file->fnode.ino >= 1);
+	if (h->file->dirty_seq == 0) {
+	  h->file->dirty_seq = log_seq + 1;
+	  dirty_files[h->file->dirty_seq].push_back(*h->file);
+	  dout(20) << __func__ << " dirty_seq = " << log_seq + 1
+			<< " (was clean)" << dendl;
+	}
+	else {
+	  if (h->file->dirty_seq != log_seq + 1) {
+		// need re-dirty, erase from list first
+		ceph_assert(dirty_files.count(h->file->dirty_seq));
+		auto it = dirty_files[h->file->dirty_seq].iterator_to(*h->file);
+		dirty_files[h->file->dirty_seq].erase(it);
+		h->file->dirty_seq = log_seq + 1;
+		dirty_files[h->file->dirty_seq].push_back(*h->file);
+		dout(20) << __func__ << " dirty_seq = " << log_seq + 1
+			<< " (was " << h->file->dirty_seq << ")" << dendl;
+	  }
+	  else {
+		dout(20) << __func__ << " dirty_seq = " << log_seq + 1
+			<< " (unchanged, do nothing) " << dendl;
+	  }
+	}
+  }
+  dout(20) << __func__ << " waiting for previous aio to complete" << dendl;
+  for (auto p : h->iocv) {
+	if (p) {
+	  p->aio_wait();
+	}
   }
 
   return 0;

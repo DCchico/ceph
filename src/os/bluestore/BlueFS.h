@@ -319,14 +319,18 @@ private:
 
   int _get_slow_device_id() { return bdev[BDEV_SLOW] ? BDEV_SLOW : BDEV_DB; }
   int _expand_slow_device(uint64_t min_size, PExtentVector& extents);
+
   int _allocate(uint8_t bdev, uint64_t len,
 		bluefs_fnode_t* node);
   int _allocate_without_fallback(uint8_t id, uint64_t len,
 				 PExtentVector* extents);
+  int _allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t offset, uint8_t id);
 
   int _flush_range(FileWriter *h, uint64_t offset, uint64_t length);
-  int _flush(FileWriter *h, bool force);
-  int _fsync(FileWriter *h, std::unique_lock<ceph::mutex>& l);
+  // Difei Add _flush to carry copy
+  int _flush(FileWriter *h, bool force, std::vector<std::vector<uint64_t>> copy = {});
+  //Difei
+  int _fsync(FileWriter *h, std::unique_lock<ceph::mutex>& l, std::vector<std::vector<uint64_t>> copy = {});
 
 #ifdef HAVE_LIBAIO
   void _claim_completed_aios(FileWriter *h, list<aio_t> *ls);
@@ -375,7 +379,7 @@ private:
   int _read_random(
     FileReader *h,   ///< [in] read from here
     uint64_t offset, ///< [in] offset
-    uint64_t len,    ///< [in] this many bytes
+    size_t len,      ///< [in] this many bytes
     char *out);      ///< [out] optional: or copy it here
 
   void _invalidate_cache(FileRef f, uint64_t offset, uint64_t length);
@@ -505,10 +509,49 @@ public:
     std::lock_guard l(lock);
     _flush_range(h, offset, length);
   }
-  int fsync(FileWriter *h) {
+
+  //Difei: fsync function branches
+  // Assume <offset, len, new_offset to put> in copy
+  // Divide copy to 4KB copys and store for flush
+  int fsync(FileWriter* h, std::vector<std::vector<uint64_t>> copy = {}, 
+	  std::vector<FileRef> files = {}) {
     std::unique_lock l(lock);
-    return _fsync(h, l);
+	if (copy.empty())
+	  return _fsync(h, l);
+	// if copy is not empty
+	std::vector<std::vector<uint64_t>>::iterator c = copy.begin();
+	std::vector<FileRef>::iterator f = files.begin();
+	uint64_t file_offset = 0;
+	uint64_t file_len = 0;
+	uint64_t new_offset = 0;
+	uint64_t phy_offset = 0;
+	uint64_t x_off = 0;
+	std::vector<std::vector<uint64_t>> copys;
+	std::vector<uint64_t> one_block;		// <new_file_offset, physical_offset, bdev_id>
+	std::vector<uint64_t>::iterator val;
+	while (f != files.end()) {
+	  val = (*c).begin();
+	  file_offset = (*c)[0];
+	  file_len = (*c)[1];
+	  new_offset = (*c)[2];
+	  while (file_len >= super.block_size) { // store new_file_offset and phy_off incrementally
+		x_off = 0;
+		auto p = (*f)->fnode.seek(file_offset, &x_off);
+		phy_offset = p->offset + x_off;
+		one_block.push_back(new_offset);
+		one_block.push_back(phy_offset);
+		one_block.push_back((*f)->fnode.prefer_bdev);
+		copys.push_back(one_block);
+		one_block.clear();
+		file_len -= super.block_size;
+	  }
+	  ++c;
+	  ++f;
+	}
+	// copys = <<new_off, phy_off>, <new_off, phy_off>, ...>
+	return _fsync (h, l, copys);
   }
+
   int read(FileReader *h, FileReaderBuffer *buf, uint64_t offset, size_t len,
 	   bufferlist *outbl, char *out) {
     // no need to hold the global lock here; we only touch h and

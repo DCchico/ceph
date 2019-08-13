@@ -32,6 +32,8 @@ public:
   virtual int64_t allocate(uint64_t want_size, uint64_t alloc_unit,
 			   uint64_t max_alloc_size, int64_t hint,
 			   PExtentVector *extents) = 0;
+	//Difei
+  virtual int64_t allocate_copy(uint64_t offset, PExtentVector *extents) = 0;
 
   int64_t allocate(uint64_t want_size, uint64_t alloc_unit,
 		   int64_t hint, PExtentVector *extents) {

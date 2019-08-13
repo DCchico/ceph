@@ -196,7 +196,7 @@ class AllocatorLevel01Loose : public AllocatorLevel01
   interval_t _get_longest_from_l0(uint64_t pos0, uint64_t pos1,
     uint64_t min_length, interval_t* tail) const;
 
-  // put available (offset, length) to interval_vector as max_length segments
+  // put new/entended extent (offset, length) to extents (res) as max_length segments
   inline void _fragment_and_emplace(uint64_t max_length, uint64_t offset,
     uint64_t len,
     interval_vector_t* res)
@@ -476,6 +476,30 @@ protected:
   }
 
 public:
+// Difei: function to mark shared blocks
+bool _allocate_copy_l0(uint64_t offset, interval_vector_t* res)
+{	
+	ceph_assert(offset % l0_granularity == 0);
+	uint64_t l0_pos = offset / l0_granularity;
+	uint64_t d0 = CHILD_PER_SLOT_L0;
+	slot_t& slot_val = l0[l0_pos / d0];
+	uint64_t shift = (l0_pos % d0) * L0_ENTRY_WIDTH;
+
+	slot_t bits = (slot_val >> shift) & L0_ENTRY_MASK;
+	if (bits == L0_ENTRY_FULL) { // entry = 00
+		slot_val |= (L0_SHARE_ONCE << shift);
+		_fragment_and_emplace(0, offset, l0_granularity, res);
+		return true;
+	}
+	else if (bits == L0_SHARE_ONCE) {
+		slot_val |= (L0_SHARE_TWICE << shift);
+		slot_val &= ~(L0_SHARE_ONCE << shift);
+		_fragment_and_emplace(0, offset, l0_granularity, res);
+		return true;
+	}
+	else
+		return false;
+}
   uint64_t debug_get_allocated(uint64_t pos0 = 0, uint64_t pos1 = 0)
   {
     if (pos1 == 0) {
@@ -558,6 +582,7 @@ public:
     std::lock_guard l(lock);
     return available;
   }
+
 
   // return l0_granularity
   inline uint64_t get_min_alloc_size() const

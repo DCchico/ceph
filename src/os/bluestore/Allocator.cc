@@ -11,8 +11,8 @@
 Allocator *Allocator::create(CephContext* cct, string type,
                              int64_t size, int64_t block_size)
 {
-  if (type == "stupid") {
-    return new StupidAllocator(cct);
+  if (type == "stupid") { // Difei
+   // return new StupidAllocator(cct);
   } else if (type == "bitmap") {
     return new BitmapAllocator(cct, size, block_size);
   }

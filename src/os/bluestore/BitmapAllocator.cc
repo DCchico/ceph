@@ -18,6 +18,23 @@ BitmapAllocator::BitmapAllocator(CephContext* _cct,
   _init(capacity, alloc_unit, false);
 }
 
+// Difei
+int64_t BitmapAllocator::allocate_copy(uint64_t offset, PExtentVector *extents)
+{
+  size_t old_size = extents->size();
+  ldout(cct, 10) << __func__ << std::hex << " 0x" << uint64_t(4096)
+	  << "/" << std::dec << dendl;
+  bool r = l1._allocate_copy_l0(offset, extents);
+  if (!r) {
+	return -ENOSPC;
+  }
+  auto& e = (*extents)[old_size];
+  ldout(cct, 10) << __func__
+	  << " extent: 0x" << std::hex << e.offset << "~" << e.length
+	  << "/" << std::dec << dendl;
+  return e.length;
+}
+
 int64_t BitmapAllocator::allocate(
   uint64_t want_size, uint64_t alloc_unit, uint64_t max_alloc_size,
   int64_t hint, PExtentVector *extents)

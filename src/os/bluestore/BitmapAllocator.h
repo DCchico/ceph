@@ -21,7 +21,8 @@ public:
   ~BitmapAllocator() override
   {
   }
-
+  // Difei
+  int64_t allocate_copy(uint64_t offset, PExtentVector *extents) override;
 
   int64_t allocate(
     uint64_t want_size, uint64_t alloc_unit, uint64_t max_alloc_size,

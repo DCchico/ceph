@@ -515,9 +515,12 @@ public:
   // Divide copy to 4KB copys and store for flush
   int fsync(FileWriter* h, std::vector<std::vector<uint64_t>> copy = {}, 
 	  std::vector<FileRef> files = {}) {
-    std::unique_lock l(lock);
-	if (copy.empty())
+        std::unique_lock l(lock);
+	cerr << "fsync:::::::: file emtpy = " << files.empty() << std::endl;
+	if (copy.empty()) {
+	  cerr << "fsync::::::::::: copy = empty" << std::endl;
 	  return _fsync(h, l);
+	}
 	// if copy is not empty
 	std::vector<std::vector<uint64_t>>::iterator c = copy.begin();
 	std::vector<FileRef>::iterator f = files.begin();
@@ -548,8 +551,9 @@ public:
 	  ++c;
 	  ++f;
 	}
+	cerr << "go into _fsync with copy size = " << copys.size()  <<std::endl;
 	// copys = <<new_off, phy_off>, <new_off, phy_off>, ...>
-	return _fsync (h, l, copys);
+	return _fsync(h, l, copys);
   }
 
   int read(FileReader *h, FileReaderBuffer *buf, uint64_t offset, size_t len,

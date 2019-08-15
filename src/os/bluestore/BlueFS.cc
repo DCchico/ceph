@@ -2338,6 +2338,7 @@ void BlueFS::wait_for_aio(FileWriter *h)
 int BlueFS::_flush(FileWriter *h, bool force, 
 	std::vector<std::vector<uint64_t>> copy)
 {
+ // cerr << "!!!!!!!!!!!!!!!copy_empty = "<< copy.empty() << std::endl;
   h->buffer_appender.flush();
   uint64_t length = h->buffer.length();
   uint64_t offset = h->pos;
@@ -2360,21 +2361,28 @@ int BlueFS::_flush(FileWriter *h, bool force,
   ceph_assert(h->pos <= h->file->fnode.size);
   //flush the by ranges
   if (copy.empty()) {
-	  return _flush_range(h, offset, length);
+      // cerr << "!!!!!!!!!!!!!!!!!!!!!regular flush range" << std::endl;
+       return _flush_range(h, offset, length);
   }
   // TODO: ranges can be flushed once by connecting them, while
   // _allocate_mark_copy can be done seperately
   uint64_t sub_len = 0;
   std::vector<std::vector<uint64_t>>::iterator it;
+  int r;
   // copy <new_offset, phy_offset, bdev>
   for (it = copy.begin(); it != copy.end(); ++it){
 	sub_len = (*it)[0] - offset;
 	if (sub_len != 0) {
-	  _flush_range(h, offset, sub_len);
+	  r = _flush_range(h, offset, sub_len);
+	  if (r < 0)
+	    return r;
 	  offset += sub_len;
 	}
-	// TODO: return error value if bdev[id] DNE
-	_allocate_mark_copy(h, offset, (*it)[1], (*it)[2]);
+	cerr << "can u c it????????????????????????????????????????????????????????????????"
+		<< std::endl;
+	r = _allocate_mark_copy(h, offset, (*it)[1], (*it)[2]);
+	if (r < 0)
+	  return r;
 	offset += super.block_size;
   }
   sub_len = off + length - offset;
@@ -2428,6 +2436,7 @@ int BlueFS::_fsync(FileWriter *h, std::unique_lock<ceph::mutex>& l,
 	std::vector<std::vector<uint64_t>> copy)
 {
   dout(10) << __func__ << " " << h << " " << h->file->fnode << dendl;
+  cerr << "_fsync:::::::: cp size = " << copy.size() << std::endl;
   int r = _flush(h, true, copy);
   if (r < 0)
      return r;
@@ -2546,12 +2555,12 @@ int BlueFS::_allocate_without_fallback(uint8_t id, uint64_t len,
 //Difei : allocate_copy function
 int BlueFS::_allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t offset, uint8_t id)
 {
-  ceph_assert(offset <= h->file->fnode.size);
+  ceph_assert(new_offset <= h->file->fnode.size);
   uint64_t allocated = h->file->fnode.get_allocated();
   // do not bother to dirty the file if we are overwriting
   // previously allocated extents.
   bool must_dirty = false; 
-  if (allocated < offset + super.block_size) {
+  if (allocated < new_offset + super.block_size) {
 	// we should never run out of log space here; see the min runway check
 	// in _flush_and_sync_log.
 	// _allocate function
@@ -2577,7 +2586,7 @@ int BlueFS::_allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t off
 	} // finish allocate!
 	must_dirty = true;
   }
-  h->file->fnode.size = offset + super.block_size;
+  h->file->fnode.size = new_offset + super.block_size;
   if (h->file->fnode.ino > 1) {
 	// we do not need to dirty the log file (or it's compacting
 	// replacement) when the file size changes because replay is

@@ -547,6 +547,7 @@ public:
 		copys.push_back(one_block);
 		one_block.clear();
 		file_len -= super.block_size;
+		new_offset += super.block_size;
 	  }
 	  ++c;
 	  ++f;

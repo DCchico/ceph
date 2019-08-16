@@ -125,6 +125,7 @@ TEST(BlueFS, copy_WR) {
   fs.fsync(h);
   files.push_back(h->file);
   fs.close_writer(h);
+  cerr << "First Write finished" << std::endl;
 }
 {
   copy.push_back({0, 4096, 0});
@@ -133,6 +134,7 @@ TEST(BlueFS, copy_WR) {
   h->append(data, sizeof(data));
   fs.fsync(h, copy, files);
   fs.close_writer(h);
+  cerr << "Copy Write finished" << std::endl;
 }
 {
 	BlueFS::FileReader* h;
@@ -233,7 +235,7 @@ TEST(BlueFS, very_large_write) {
 
   rm_temp_bdev(fn);
 }
-
+*/
 TEST(BlueFS, very_large_copy) {
   // we'll write a ~3G file, so allocate more than that for the whole fs
   uint64_t size = 1048576 * 1024 * 8ull;
@@ -262,11 +264,14 @@ TEST(BlueFS, very_large_copy) {
 	h->append(buf, sizeof(buf));
   }
   fs.fsync(h);
-  copy.push_back({ 0, 4096, 0 });
+  files.push_back(h->file);
   files.push_back(h->file);
   fs.close_writer(h);
+  cerr << "First Write finished" << std::endl;
 }
 {
+  copy.push_back({ 0, 8192, 0 });
+  copy.push_back({8192, 4096, 8192});
   BlueFS::FileWriter* h;
   ASSERT_EQ(0, fs.open_for_write("dir", "bigfile_cp", &h, false));
   for (unsigned i = 0; i < 3 * 1024 * 1048576ull / sizeof(buf); ++i) {
@@ -274,6 +279,7 @@ TEST(BlueFS, very_large_copy) {
   }
   fs.fsync(h, copy, files);
   fs.close_writer(h);
+  cerr << "Second copy write finished!" << std::endl;
 }
 {
   BlueFS::FileReader* h;
@@ -298,7 +304,7 @@ TEST(BlueFS, very_large_copy) {
 
   rm_temp_bdev(fn);
 }
-*/
+
 /*
 #define ALLOC_SIZE 4096
 

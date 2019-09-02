@@ -106,6 +106,7 @@ TEST(BlueFS, write_read) {
 TEST(BlueFS, copy_WR) {
   uint64_t size = 1048576 * 128;
   string fn = get_temp_bdev(size);
+  g_ceph_context->_conf->bluefs_alloc_size = 4096;
   BlueFS fs(g_ceph_context);
   ASSERT_EQ(0, fs.add_block_device(BlueFS::BDEV_DB, fn, false));
   fs.add_block_extent(BlueFS::BDEV_DB, 1048576, size - 1048576);
@@ -128,7 +129,7 @@ TEST(BlueFS, copy_WR) {
   cerr << "First Write finished" << std::endl;
 }
 {
-  copy.push_back({0, 4096, 0});
+  copy.push_back({4096, 4096, 4096});
   BlueFS::FileWriter* h;
   ASSERT_EQ(0, fs.open_for_write("dir", "file_cp", &h, false));
   h->append(data, sizeof(data));
@@ -183,11 +184,13 @@ TEST(BlueFS, small_appends) {
   fs.umount();
   rm_temp_bdev(fn);
 }
-
+*/ 
 TEST(BlueFS, very_large_write) {
   // we'll write a ~3G file, so allocate more than that for the whole fs
   uint64_t size = 1048576 * 1024 * 8ull;
   string fn = get_temp_bdev(size);
+  cerr << "l0_granularity = " <<  g_ceph_context->_conf->bluefs_alloc_size << std::endl;
+  g_ceph_context->_conf->bluefs_alloc_size = 4096;
   BlueFS fs(g_ceph_context);
 
   bool old = g_ceph_context->_conf.get_val<bool>("bluefs_buffered_io");
@@ -198,7 +201,7 @@ TEST(BlueFS, very_large_write) {
   uuid_d fsid;
   ASSERT_EQ(0, fs.mkfs(fsid));
   ASSERT_EQ(0, fs.mount());
-  char buf[1048571]; // this is biggish, but intentionally not evenly aligned
+  char buf[1048576]; // this is biggish, but intentionally not evenly aligned
   for (unsigned i = 0; i < sizeof(buf); ++i) {
     buf[i] = i;
   }
@@ -206,7 +209,16 @@ TEST(BlueFS, very_large_write) {
     BlueFS::FileWriter *h;
     ASSERT_EQ(0, fs.mkdir("dir"));
     ASSERT_EQ(0, fs.open_for_write("dir", "bigfile", &h, false));
-    for (unsigned i = 0; i < 3*1024*1048576ull / sizeof(buf); ++i) {
+    for (unsigned i = 0; i < 3*1048576ull / sizeof(buf); ++i) {
+      h->append(buf, sizeof(buf));
+    }
+    fs.fsync(h);
+    fs.close_writer(h);
+  }
+  {
+    BlueFS::FileWriter *h;
+    ASSERT_EQ(0, fs.open_for_write("dir", "bigfile", &h, true));
+    for (unsigned i = 0; i < 3*1048576ull / sizeof(buf); ++i) {
       h->append(buf, sizeof(buf));
     }
     fs.fsync(h);
@@ -217,12 +229,12 @@ TEST(BlueFS, very_large_write) {
     ASSERT_EQ(0, fs.open_for_read("dir", "bigfile", &h));
     bufferlist bl;
     BlueFS::FileReaderBuffer readbuf(10485760);
-    for (unsigned i = 0; i < 3*1024*1048576ull / sizeof(buf); ++i) {
+    for (unsigned i = 0; i < 6*1048576ull / 4096; ++i) {
       bl.clear();
-      fs.read(h, &readbuf, i * sizeof(buf), sizeof(buf), &bl, NULL);
-      int r = memcmp(buf, bl.c_str(), sizeof(buf));
+      fs.read(h, &readbuf, i * 4096, 4096, &bl, NULL);
+      int r = memcmp(buf, bl.c_str(), 4096);
       if (r) {
-	cerr << "read got mismatch at offset " << i*sizeof(buf) << " r " << r
+	cerr << "read got mismatch at offset " << i*4096 << " r " << r
 	     << std::endl;
       }
       ASSERT_EQ(0, r);
@@ -235,7 +247,7 @@ TEST(BlueFS, very_large_write) {
 
   rm_temp_bdev(fn);
 }
-*/
+
 TEST(BlueFS, very_large_copy) {
   // we'll write a ~3G file, so allocate more than that for the whole fs
   uint64_t size = 1048576 * 1024 * 8ull;
@@ -260,21 +272,21 @@ TEST(BlueFS, very_large_copy) {
   BlueFS::FileWriter* h;
   ASSERT_EQ(0, fs.mkdir("dir"));
   ASSERT_EQ(0, fs.open_for_write("dir", "bigfile", &h, false));
-  for (unsigned i = 0; i < 3 * 1024 * 1048576ull / sizeof(buf); ++i) {
+  for (unsigned i = 0; i < 1024 * 1048576ull / sizeof(buf); ++i) {
 	h->append(buf, sizeof(buf));
   }
   fs.fsync(h);
-  files.push_back(h->file);
+  //files.push_back(h->file);
   files.push_back(h->file);
   fs.close_writer(h);
   cerr << "First Write finished" << std::endl;
 }
 {
-  copy.push_back({ 0, 8192, 0 });
-  copy.push_back({8192, 4096, 8192});
+  //copy.push_back({ 0, 8192, 0 });
+  copy.push_back({4096, 4096, 4096});
   BlueFS::FileWriter* h;
   ASSERT_EQ(0, fs.open_for_write("dir", "bigfile_cp", &h, false));
-  for (unsigned i = 0; i < 3 * 1024 * 1048576ull / sizeof(buf); ++i) {
+  for (unsigned i = 0; i < 1024 * 1048576ull / sizeof(buf); ++i) {
 	h->append(buf, sizeof(buf));
   }
   fs.fsync(h, copy, files);
@@ -286,12 +298,12 @@ TEST(BlueFS, very_large_copy) {
   ASSERT_EQ(0, fs.open_for_read("dir", "bigfile_cp", &h));
   bufferlist bl;
   BlueFS::FileReaderBuffer readbuf(10485760);
-  for (unsigned i = 0; i < 3 * 1024 * 1048576ull / sizeof(buf); ++i) {
+  for (unsigned i = 0; i < 1024 * 1048576ull / 4096; ++i) {
 	bl.clear();
-	fs.read(h, &readbuf, i * sizeof(buf), sizeof(buf), &bl, NULL);
-	int r = memcmp(buf, bl.c_str(), sizeof(buf));
+	fs.read(h, &readbuf, i * 4096, 4096, &bl, NULL);
+	int r = memcmp(buf, bl.c_str(), 4096);
 	if (r) {
-	  cerr << "read got mismatch at offset " << i * sizeof(buf) << " r " << r
+	  cerr << "read got mismatch at offset " << i * 4096 << " r =  " << r
 			<< std::endl;
 	}
   ASSERT_EQ(0, r);

@@ -450,6 +450,7 @@ bool AllocatorLevel01Loose::_allocate_l1(uint64_t length,
       }
     }
   } else {
+    cerr << "Begin allocate l1 as min_len = l0_granularity" << std::endl;
     uint64_t l0_w = slotset_width * d0;
 
     for (auto idx = l1_pos_start / d1;
@@ -465,15 +466,18 @@ bool AllocatorLevel01Loose::_allocate_l1(uint64_t length,
         ++alloc_fragments_fast;
 	_fragment_and_emplace(max_length, idx * d1 * l1_granularity, to_alloc,
 	  res);
-        _mark_alloc_l1_l0(idx * d1 * bits_per_slotset,
-	  idx * d1 * bits_per_slotset + to_alloc / l0_granularity);
+        _mark_alloc_l1_l0(idx * d1 * l0_w,
+	  idx * d1 * l0_w + to_alloc / l0_granularity);
         continue;
       }
       auto free_pos = find_next_set_bit(slot_val, 0);
       ceph_assert(free_pos < bits_per_slot);
       do {
         ceph_assert(length > *allocated);
-
+	if (free_pos % 2) {
+	  --free_pos;
+	  cerr << "Difei: help free_pos -= 1" << std::endl;
+	}
         bool empty;
         empty = _allocate_l0(length, max_length,
 	  (idx * d1 + free_pos / L1_ENTRY_WIDTH) * l0_w,

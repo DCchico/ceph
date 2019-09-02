@@ -44,8 +44,7 @@ int64_t BitmapAllocator::allocate(
   ldout(cct, 10) << __func__ << std::hex << " 0x" << want_size
 		 << "/" << alloc_unit << "," << max_alloc_size << "," << hint
 		 << std::dec << dendl;
-    
-    
+ 
   _allocate_l2(want_size, alloc_unit, max_alloc_size, hint,
     &allocated, extents);
   if (!allocated) {

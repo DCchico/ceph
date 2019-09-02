@@ -18,6 +18,7 @@ public:
     : offset(o), length(l), bdev(b) {}
 
   uint64_t end() const { return  offset + length; }
+
   DENC(bluefs_extent_t, v, p) {
     DENC_START(1, 1, p);
     denc_lba(v.offset, p);
@@ -40,6 +41,7 @@ struct bluefs_fnode_t {
   utime_t mtime;
   uint8_t prefer_bdev;
   mempool::bluefs::vector<bluefs_extent_t> extents;
+  mempool::bluefs::vector<bool> extents_type;
 
   // precalculated logical offsets for extents vector entries
   // allows fast lookup for extent index by the offset value via upper_bound()
@@ -86,36 +88,35 @@ struct bluefs_fnode_t {
     DENC_FINISH(p);
   }
 
-  void append_extent(const bluefs_extent_t& ext) {
-    if (!extents.empty() &&
-	extents.back().end() == ext.offset &&
-	(uint64_t)extents.back().length + (uint64_t)ext.length < 0xffffffff) {
-      extents.back().length += ext.length;
-    } else {
-      extents_index.emplace_back(allocated);
-      extents.push_back(ext);
-    }
+  void append_extent(const bluefs_extent_t& ext, bool type=1) {
+    extents_index.emplace_back(allocated);
+    extents.push_back(ext);
+	extents_type.push_back(type);
     allocated += ext.length;
   }
 
   void pop_front_extent() {
     auto it = extents.begin();
+	auto type_it = extents_type.begin();
     allocated -= it->length;
     extents_index.erase(extents_index.begin());
     for (auto& i: extents_index) {
       i -= it->length;
     }
     extents.erase(it);
+	extents_type.erase(type_it);
   }
   
   void swap_extents(bluefs_fnode_t& other) {
     other.extents.swap(extents);
     other.extents_index.swap(extents_index);
+	other.extents_type.swap(extents_type);
     std::swap(allocated, other.allocated);
   }
   void clear_extents() {
     extents_index.clear();
     extents.clear();
+	extents_type.clear();
     allocated = 0;
   }
 

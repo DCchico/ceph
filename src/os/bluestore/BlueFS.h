@@ -538,14 +538,14 @@ public:
 	  file_len = (*c)[1];
 	  new_offset = (*c)[2];
 	  while (file_len >= super.block_size) { // store new_file_offset and phy_off incrementally
-		x_off = 0;
-		auto p = (*f)->fnode.seek(file_offset, &x_off);
-		phy_offset = p->offset + x_off;
+	        auto p = (*f)->fnode.seek(file_offset, &x_off);
+  	        phy_offset = p->offset + x_off;
 		one_block.push_back(new_offset);
 		one_block.push_back(phy_offset);
 		one_block.push_back((*f)->fnode.prefer_bdev);
 		copys.push_back(one_block);
 		one_block.clear();
+		file_offset += super.block_size;
 		file_len -= super.block_size;
 		new_offset += super.block_size;
 	  }

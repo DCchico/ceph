@@ -2201,8 +2201,8 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
   ceph_assert(p != h->file->fnode.extents.end());
   dout(20) << __func__ << " in " << *p << " x_off 0x"
            << std::hex << x_off << std::dec << dendl;
-  cerr << "2204:::in flush_range:: begin to calculate partial" << std::endl;
   unsigned partial = x_off & ~super.block_mask();
+  cerr << "2205:::in flush_range:: begin to calculate partial = " << partial << std::endl;
   bufferlist bl;
   if (partial) {
     dout(20) << __func__ << " using partial tail 0x"
@@ -2219,19 +2219,21 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
       }
     }
   }
+  cerr << "Before judge whether to append only part of h->buffer.length() = " << h->buffer.length() << std::endl; 
+  cerr << "length = " << length << std::endl;
   if (length == partial + h->buffer.length()) { // 1. want to read all data in the buffer
     cerr << "flush ALL Data Remained from the buffer to SSD" << std::endl;  
     bl.claim_append_piecewise(h->buffer);		// splice data in buffer to tail of bl
   } else {						// 2. when length needed is not whole data in buffer
     bufferlist t;
+    cerr << "flush only part of data from the buffer to SSD" << std::endl;
     h->buffer.splice(0, length, &t);			// move!!! buffer(0,length) to tail of bufferlist t
     bl.claim_append_piecewise(t);				// splice needed data length (from t) to bl
-    cerr << "flush only part of data from the buffer to SSD" << std::endl;
     //cerr << "substr_of ( length = " << length << "  buffer.length - length = "
 	//<< h->buffer.length() - length << std::endl;
-    t.substr_of(h->buffer, length, h->buffer.length() - length);	// t is set to unneeded data
+    //t.substr_of(h->buffer, length, h->buffer.length() - length);	// t is set to another buffer = lengtha
     //cerr << "no error after line 2226's substr_of() " << std::endl;
-    h->buffer.swap(t);					// swap buffer to unneeded data
+    //h->buffer.swap(t);					// swap buffer to unneeded data
     dout(20) << " leaving 0x" << std::hex << h->buffer.length() << std::dec
              << " unflushed" << dendl;
   }
@@ -2248,8 +2250,7 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
 
   dout(30) << "dump:\n";
   bl.hexdump(*_dout);
-  *_dout << dendl;
-
+  *_dout << dendl; 
   h->pos = offset + length;
   h->tail_block.clear();
 
@@ -2258,6 +2259,8 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
   //cerr << "no error line 2252: Before go into while (length > 0) " << std::endl;
   while (length > 0) {
     uint64_t x_len = std::min(p->length - x_off, length);	//size can be writen
+    cerr << "----------flush x_len = " << x_len << "  since p.length = " << p->length
+	<< " x_off = " << x_off << " length = " << x_len << std::endl;
     bufferlist t;
     //cerr << "no error before line 2257 hhhhhhhhhhhhhhhhhhhhhh" << std::endl;
     t.substr_of(bl, bloff, x_len);							// !!!!!!t set to data to be writen
@@ -2269,9 +2272,9 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
                << std::hex << tail
 	       << " and padding block with 0x" << zlen
 	       << std::dec << dendl;
-      cerr << "no error line 2264 substr " << std::endl; 
+      //cerr << "no error line 2264 substr " << std::endl; 
       h->tail_block.substr_of(bl, bl.length() - tail, tail); // set h->tail_block to the end of bl
-      cerr << "no error after line 2264 substr " << std::endl; 
+      //cerr << "no error after line 2264 substr " << std::endl; 
       if (h->file->fnode.ino > 1) {
 		// we are using the page_aligned_appender, and can safely use
 		// the tail of the raw buffer.
@@ -2290,6 +2293,7 @@ int BlueFS::_flush_range(FileWriter *h, uint64_t offset, uint64_t length)
 	t.append_zero(zlen);
       }
     }
+    cerr << "no erro before real write" << std::endl;
     if (cct->_conf->bluefs_sync_write) {
       bdev[p->bdev]->write(p->offset + x_off, t, buffered, h->write_hint);
     } else {
@@ -2396,12 +2400,15 @@ int BlueFS::_flush(FileWriter *h, bool force,
 	if (r < 0)
 	  return r;
 	offset += super.block_size;
+	_flush_bdev_safely(h);
   }
   sub_len = off + length - offset;
   if (sub_len > 0) {
 	cerr << "!!!!!!!!!!!!!!!!!!! use normal flush range to flush the tail after copy!!!!!!@" 
 		<< offset << "length = " << sub_len << std::endl;
-	_flush_range(h, offset, sub_len);
+	r = _flush_range(h, offset, sub_len);
+	if (r < 0)
+	  return r;
   }
   return 0;
 }
@@ -2571,6 +2578,7 @@ int BlueFS::_allocate_without_fallback(uint8_t id, uint64_t len,
 int BlueFS::_allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t offset, uint8_t id)
 {
   cerr << "Copy 4KB at offset = " << new_offset << std::endl;
+  cerr << "Copy 4KB when h->buffer length =  " << h->buffer.length() << std::endl;
   ceph_assert(new_offset <= h->file->fnode.size);
   uint64_t allocated = h->file->fnode.get_allocated();
   // do not bother to dirty the file if we are overwriting
@@ -2597,7 +2605,9 @@ int BlueFS::_allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t off
 	  }
 
 	  for (auto& p : extents) {
-		h->file->fnode.append_extent(bluefs_extent_t(id, p.offset, p.length));
+		cerr << "Append Extent < Phy_Offset = " << p.offset << ", length = "
+			<< p.length << ">" << std::endl;
+		h->file->fnode.append_extent(bluefs_extent_t(id, p.offset, p.length), false);
 	  }
 	} // finish allocate!
 	must_dirty = true;
@@ -2642,8 +2652,9 @@ int BlueFS::_allocate_mark_copy(FileWriter *h, uint64_t new_offset, uint64_t off
 	}
   }
   h->pos += super.block_size;
-  bufferlist t;
+  bufferlist t; 
   h->buffer.splice(0, super.block_size, &t);
+  cerr << "-----------------In allocate_mark copy: h->buffer.length() = " << h->buffer.length() << std::endl; 
   return 0;
 }
 
@@ -2661,8 +2672,18 @@ int BlueFS::_allocate(uint8_t id, uint64_t len,
   
   uint64_t hint = 0;
   if (alloc[id]) {
+    cerr << "Allocate NEW EXTENTS: extents.size = " << node->extents.size() << " id: "
+		<< alloc[id] << std::endl;
     if (!node->extents.empty() && node->extents.back().bdev == id) {
-      hint = node->extents.back().end();
+      auto t = node->extents_type.rbegin();
+      for (auto e = node->extents.rbegin(); e != node->extents.rend(); ++e) {
+	if ((*t) == true && (*e).bdev == id) {
+	   hint = (*e).end();
+	   break;
+	}
+	++t;
+      }
+      cerr << "In regular allocate, hint = " << hint << std::endl;
     }   
     extents.reserve(4);  // 4 should be (more than) enough for most allocations
     alloc_len = alloc[id]->allocate(left, min_alloc_size, hint, &extents);
@@ -2722,6 +2743,8 @@ int BlueFS::_allocate(uint8_t id, uint64_t len,
   }
 
   for (auto& p : extents) {
+    cerr << "Append Extent < Phy_Offset = " << p.offset << ", length = "
+	<< p.length << ">" << std::endl;
     node->append_extent(bluefs_extent_t(id, p.offset, p.length));
   }
    

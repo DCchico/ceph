@@ -488,13 +488,16 @@ bool _allocate_copy_l0(uint64_t offset, interval_vector_t* res)
 	slot_t bits = (slot_val >> shift) & L0_ENTRY_MASK;
 	if (bits == L0_ENTRY_FULL) { // entry = 00
 		slot_val |= (L0_SHARE_ONCE << shift);
-		_fragment_and_emplace(0, offset, l0_granularity, res);
+		_fragment_and_emplace(l0_granularity, offset, l0_granularity, res);
+		cerr << "Mark COPY: ADD res and l0_gran = " << l0_granularity << std::endl;
+		for (auto& p: *res )
+			cerr << "res length = " << p.length << std::endl;
 		return true;
 	}
 	else if (bits == L0_SHARE_ONCE) {
 		slot_val |= (L0_SHARE_TWICE << shift);
 		slot_val &= ~(L0_SHARE_ONCE << shift);
-		_fragment_and_emplace(0, offset, l0_granularity, res);
+		_fragment_and_emplace(l0_granularity, offset, l0_granularity, res);
 		return true;
 	}
 	else
@@ -729,8 +732,10 @@ protected:
       return;
     }
     if (hint != 0) {
+      hint /= l2_granularity;
       last_pos = (hint / d) < l2.size() ? p2align(hint, d) : 0;
     }
+    cerr << "fbmap: l2 gran = " << l2_granularity << " allocated = " << *allocated << std::endl;
     auto l2_pos = last_pos;
     auto last_pos0 = last_pos;
     auto pos = last_pos / d;
@@ -753,9 +758,11 @@ protected:
 	} else {
 	  free_pos = find_next_set_bit(slot_val, 0);
 	  ceph_assert(free_pos < bits_per_slot);
+	  cerr << "fbmap l2_allocate: free_pos = " << free_pos << std::endl;
 	}
 	do {
 	  ceph_assert(length > *allocated);
+    	  cerr << "fbmap: alloc_l1_length = " << length << " allocated = " << *allocated << std::endl;
 	  bool empty = l1._allocate_l1(length,
 	    min_length,
 	    max_length,
@@ -763,6 +770,7 @@ protected:
 	    (l2_pos + free_pos + 1) * l1_w,
 	    allocated,
 	    res);
+	  cerr << "free_pos: mark = " << empty << std::endl;
 	  if (empty) {
 	    slot_val &= ~(slot_t(1) << free_pos);
 	  }
@@ -772,6 +780,7 @@ protected:
 	  ++free_pos;
 	  if (!all_set) {
 	    free_pos = find_next_set_bit(slot_val, free_pos);
+	    cerr << "fbmap l2_allocate: !!!more free_pos = " << free_pos << std::endl;
 	  }
 	} while (free_pos < bits_per_slot);
 	last_pos = l2_pos;
